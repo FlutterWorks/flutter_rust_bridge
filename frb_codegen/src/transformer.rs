@@ -1,42 +1,46 @@
-use crate::api_types::ApiType::{Boxed, StructRef};
-use crate::api_types::{ApiField, ApiFile, ApiFunc, ApiTypeBoxed};
 use log::debug;
 
-pub fn transform(src: ApiFile) -> ApiFile {
+use crate::ir::IrType::*;
+use crate::ir::*;
+
+pub fn transform(src: IrFile) -> IrFile {
     let dst_funcs = src
         .funcs
         .into_iter()
-        .map(|src_func| ApiFunc {
-            name: src_func.name.clone(),
+        .map(|src_func| IrFunc {
             inputs: src_func
                 .inputs
                 .into_iter()
                 .map(transform_func_input_add_boxed)
                 .collect(),
-            output: src_func.output,
+            ..src_func
         })
         .collect();
 
-    ApiFile {
+    IrFile {
         funcs: dst_funcs,
-        struct_pool: src.struct_pool,
+        ..src
     }
 }
 
-fn transform_func_input_add_boxed(input: ApiField) -> ApiField {
-    if let StructRef(_) = &input.ty {
-        debug!(
-            "transform_func_input_add_boxed wrap Boxed to field={:?}",
-            input
-        );
-        ApiField {
-            ty: Boxed(Box::new(ApiTypeBoxed {
-                exist_in_real_api: false, // <--
-                inner: input.ty.clone(),
-            })),
-            name: input.name.clone(),
+fn transform_func_input_add_boxed(input: IrField) -> IrField {
+    match &input.ty {
+        StructRef(_)
+        | EnumRef(IrTypeEnumRef {
+            is_struct: true, ..
+        }) => {
+            debug!(
+                "transform_func_input_add_boxed wrap Boxed to field={:?}",
+                input
+            );
+            IrField {
+                ty: Boxed(IrTypeBoxed {
+                    exist_in_real_api: false, // <--
+                    inner: Box::new(input.ty.clone()),
+                }),
+                ..input
+            }
         }
-    } else {
-        input.clone()
+        _ => input,
     }
 }
