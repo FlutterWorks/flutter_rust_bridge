@@ -1,3 +1,11 @@
+## 1.23.0
+
+* Fix extra comma in enum structs #391 (thanks @Desdaemon)
+
+## 1.22.2
+
+* Bump dependency versions
+
 ## 1.22.1
 
 * Improve dart analyzer ignores

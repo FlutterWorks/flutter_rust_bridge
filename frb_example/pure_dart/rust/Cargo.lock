@@ -28,9 +28,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.55"
+version = "1.0.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "159bb86af3a200e19a068f4224eae4c8bb2d0fa054c7e5d1cacd5cef95e684cd"
+checksum = "4361135be9122e0870de935d7c439aef945b9f9ddd4199a553b5270b49c82a27"
 dependencies = [
  "backtrace",
 ]
@@ -85,7 +85,7 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "flutter_rust_bridge"
-version = "1.22.1"
+version = "1.23.0"
 dependencies = [
  "allo-isolate",
  "anyhow",
@@ -111,7 +111,7 @@ version = "0.1.0"
 
 [[package]]
 name = "flutter_rust_bridge_macros"
-version = "1.22.1"
+version = "1.23.0"
 
 [[package]]
 name = "gimli"
