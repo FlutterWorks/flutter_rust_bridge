@@ -1,10 +1,13 @@
-use crate::ir::*;
+use crate::target::Target;
+use crate::utils::misc::mod_from_rust_path;
+use crate::{generator, ir::*, Opts};
 use std::collections::{HashMap, HashSet};
 
 pub type IrStructPool = HashMap<String, IrStruct>;
 pub type IrEnumPool = HashMap<String, IrEnum>;
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct IrFile {
     pub funcs: Vec<IrFunc>,
     pub struct_pool: IrStructPool,
@@ -28,8 +31,26 @@ impl IrFile {
             }
             if include_func_output {
                 func.output.visit_types(f, self);
+                if let Some(error_output) = &func.error_output {
+                    error_output.visit_types(f, self);
+                }
             }
         }
+    }
+
+    pub fn get_c_struct_names(&self) -> Vec<String> {
+        let c_struct_names = self
+            .distinct_types(true, true)
+            .iter()
+            .filter_map(|ty| {
+                if let IrType::StructRef(_) = ty {
+                    Some(ty.rust_wire_type(Target::Io))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        c_struct_names
     }
 
     pub fn distinct_types(
@@ -57,5 +78,31 @@ impl IrFile {
         ans.sort_by_key(|ty| ty.safe_ident());
 
         ans
+    }
+
+    pub fn generate_rust(&self, config: &Opts) -> generator::rust::Output {
+        generator::rust::generate(
+            self,
+            &mod_from_rust_path(&config.rust_input_path, &config.rust_crate_dir),
+            config,
+        )
+    }
+
+    pub fn generate_dart(
+        &self,
+        config: &Opts,
+        wasm_funcs: &[IrFuncDisplay],
+    ) -> generator::dart::Output {
+        generator::dart::generate(self, config, wasm_funcs)
+    }
+    /// get all symbols(function names) defined explicitly or implictily
+    pub fn get_all_symbols(&self, config: &Opts) -> Vec<String> {
+        let generated_rust = self.generate_rust(config);
+
+        generated_rust
+            .extern_func_names
+            .into_iter()
+            .filter(|s| *s != "free_WireSyncReturn")
+            .collect::<Vec<_>>()
     }
 }

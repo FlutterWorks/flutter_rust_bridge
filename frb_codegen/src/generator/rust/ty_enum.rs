@@ -1,73 +1,89 @@
+use itertools::Itertools;
+
+use crate::generator::rust::get_into_into_dart;
 use crate::generator::rust::ty::*;
 use crate::generator::rust::ExternFuncCollector;
+use crate::generator::rust::NO_PARAMS;
 use crate::ir::*;
+use crate::target::Acc;
+use crate::target::Target::*;
 use crate::type_rust_generator_struct;
 
 type_rust_generator_struct!(TypeEnumRefGenerator, IrTypeEnumRef);
 
 impl TypeRustGeneratorTrait for TypeEnumRefGenerator<'_> {
-    fn wire2api_body(&self) -> Option<String> {
+    fn wire2api_body(&self) -> Acc<Option<String>> {
         let enu = self.ir.get(self.context.ir_file);
-        Some(if self.ir.is_struct {
-            let variants = enu
-                .variants()
-                .iter()
-                .enumerate()
-                .map(|(idx, variant)| match &variant.kind {
-                    IrVariantKind::Value => {
-                        format!("{} => {}::{},", idx, enu.name, variant.name)
-                    }
-                    IrVariantKind::Struct(st) => {
-                        let fields: Vec<_> = st
-                            .fields
-                            .iter()
-                            .map(|field| {
-                                if st.is_fields_named {
-                                    format!("{0}: ans.{0}.wire2api()", field.name.rust_style())
+        Acc::new(|target| {
+            if matches!(target, Common) {
+                return None;
+            }
+            let wasm = target.is_wasm();
+            let mut variants =
+                (enu.variants())
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, variant)| match &variant.kind {
+                        IrVariantKind::Value => {
+                            format!("{} => {}::{},", idx, enu.name, variant.name)
+                        }
+                        IrVariantKind::Struct(st) => {
+                            let mut fields = (st.fields).iter().enumerate().map(|(idx, field)| {
+                                let field_name = field.name.rust_style();
+                                let field_ = if st.is_fields_named {
+                                    format!("{field_name}: ")
                                 } else {
-                                    format!("ans.{}.wire2api()", field.name.rust_style())
+                                    String::new()
+                                };
+
+                                if !target.is_wasm() {
+                                    format!("{field_} ans.{field_name}.wire2api()")
+                                } else {
+                                    format!("{field_} self_.get({}).wire2api()", idx + 1)
                                 }
-                            })
-                            .collect();
-                        let (left, right) = st.brackets_pair();
-                        format!(
-                            "{} => unsafe {{
+                            });
+
+                            let (left, right) = st.brackets_pair();
+                            if target.is_wasm() {
+                                format!(
+                                    "{idx} => {{
+                                        {enum_name}::{variant_name}{left}{fields}{right} }},",
+                                    enum_name = enu.name,
+                                    variant_name = variant.name,
+                                    fields = fields.join(",")
+                                )
+                            } else {
+                                format!(
+                                    "{idx} => unsafe {{
                                         let ans = support::box_from_leak_ptr(self.kind);
-                                        let ans = support::box_from_leak_ptr(ans.{2});
-                                        {}::{2}{3}{4}{5}
+                                        let ans = support::box_from_leak_ptr(ans.{variant_name});
+                                        {enum_name}::{variant_name}{left}{fields}{right}
                                     }}",
-                            idx,
-                            enu.name,
-                            variant.name,
-                            left,
-                            fields.join(","),
-                            right
-                        )
-                    }
-                })
-                .collect::<Vec<_>>();
-            format!(
-                "match self.tag {{
-                        {}
-                        _ => unreachable!(),
-                    }}",
+                                    enum_name = enu.name,
+                                    variant_name = variant.name,
+                                    fields = fields.join(",")
+                                )
+                            }
+                        }
+                    });
+            Some(format!(
+                "{}
+                match self{} {{
+                    {}
+                    _ => unreachable!(),
+                }}",
+                if wasm {
+                    "let self_ = self.unchecked_into::<JsArray>();"
+                } else {
+                    ""
+                },
+                if wasm {
+                    "_.get(0).unchecked_into_f64() as _"
+                } else {
+                    ".tag"
+                },
                 variants.join("\n"),
-            )
-        } else {
-            let variants = enu
-                .variants()
-                .iter()
-                .enumerate()
-                .map(|(idx, variant)| format!("{} => {}::{},", idx, enu.name, variant.name))
-                .collect::<Vec<_>>()
-                .join("\n");
-            format!(
-                "match self {{
-                        {}
-                        _ => unreachable!(\"Invalid variant for {}: {{}}\", self),
-                    }}",
-                variants, enu.name
-            )
+            ))
         })
     }
 
@@ -89,8 +105,8 @@ impl TypeRustGeneratorTrait for TypeEnumRefGenerator<'_> {
                             format!(
                                 "{}: {}{},",
                                 field.name.rust_style(),
-                                field.ty.rust_wire_modifier(),
-                                field.ty.rust_wire_type()
+                                field.ty.rust_wire_modifier(Io),
+                                field.ty.rust_wire_type(Io)
                             )
                         })
                         .collect(),
@@ -98,7 +114,7 @@ impl TypeRustGeneratorTrait for TypeEnumRefGenerator<'_> {
                 format!(
                     "#[repr(C)]
                     #[derive(Clone)]
-                    pub struct {}_{} {{ {} }}",
+                    pub struct wire_{}_{} {{ {} }}",
                     self.ir.name,
                     variant.name,
                     fields.join("\n")
@@ -108,7 +124,7 @@ impl TypeRustGeneratorTrait for TypeEnumRefGenerator<'_> {
         let union_fields = src
             .variants()
             .iter()
-            .map(|variant| format!("{0}: *mut {1}_{0},", variant.name, self.ir.name))
+            .map(|variant| format!("{0}: *mut wire_{1}_{0},", variant.name, self.ir.name))
             .collect::<Vec<_>>();
         format!(
             "#[repr(C)]
@@ -121,7 +137,7 @@ impl TypeRustGeneratorTrait for TypeEnumRefGenerator<'_> {
             }}
 
             {3}",
-            self.ir.rust_wire_type(),
+            self.ir.rust_wire_type(Io),
             self.ir.name,
             union_fields.join("\n"),
             variant_structs.join("\n\n")
@@ -178,14 +194,7 @@ impl TypeRustGeneratorTrait for TypeEnumRefGenerator<'_> {
     fn self_access(&self, obj: String) -> String {
         let src = self.ir.get(self.context.ir_file);
         match &src.wrapper_name {
-            Some(_) => format!("{}.0", obj),
-            None => obj,
-        }
-    }
-
-    fn wrap_obj(&self, obj: String) -> String {
-        match self.wrapper_struct() {
-            Some(wrapper) => format!("{}({})", wrapper, obj),
+            Some(_) => format!("{obj}.0"),
             None => obj,
         }
     }
@@ -198,92 +207,75 @@ impl TypeRustGeneratorTrait for TypeEnumRefGenerator<'_> {
             None => (&src.name, "Self"),
         };
         let self_ref = self.self_access("self".to_owned());
-        if self.ir.is_struct {
-            let variants = src
-                .variants()
-                .iter()
-                .enumerate()
-                .map(|(idx, variant)| {
-                    let tag = format!("{}.into_dart()", idx);
-                    match &variant.kind {
-                        IrVariantKind::Value => {
-                            format!("{}::{} => vec![{}],", self_path, variant.name, tag)
-                        }
-                        IrVariantKind::Struct(s) => {
-                            let fields = Some(tag)
-                                .into_iter()
-                                .chain(s.fields.iter().map(|field| {
-                                    let gen = TypeRustGenerator::new(
-                                        field.ty.clone(),
-                                        self.context.ir_file,
-                                    );
-                                    gen.convert_to_dart(field.name.rust_style().to_owned())
-                                }))
-                                .collect::<Vec<_>>();
-                            let pattern = s
-                                .fields
-                                .iter()
-                                .map(|field| field.name.rust_style().to_owned())
-                                .collect::<Vec<_>>();
-                            let (left, right) = s.brackets_pair();
-                            format!(
-                                "{}::{}{}{}{} => vec![{}],",
-                                self_path,
-                                variant.name,
-                                left,
-                                pattern.join(","),
-                                right,
-                                fields.join(",")
-                            )
-                        }
+        let variants = src
+            .variants()
+            .iter()
+            .enumerate()
+            .map(|(idx, variant)| {
+                let tag = format!("{idx}.into_dart()");
+                match &variant.kind {
+                    IrVariantKind::Value => {
+                        format!("{self_path}::{} => vec![{tag}],", variant.name)
                     }
-                })
-                .collect::<Vec<_>>();
-            format!(
-                "impl support::IntoDart for {} {{
-                fn into_dart(self) -> support::DartCObject {{
+                    IrVariantKind::Struct(st) => {
+                        let fields = Some(tag)
+                            .into_iter()
+                            .chain(st.fields.iter().map(|field| {
+                                let gen = TypeRustGenerator::new(
+                                    field.ty.clone(),
+                                    self.context.ir_file,
+                                    self.context.config,
+                                );
+
+                                gen.convert_to_dart(field.name.rust_style().to_owned())
+                            }))
+                            .collect::<Vec<_>>();
+                        let pattern = st
+                            .fields
+                            .iter()
+                            .map(|field| field.name.rust_style().to_owned())
+                            .collect::<Vec<_>>();
+                        let (left, right) = st.brackets_pair();
+                        format!(
+                            "{}::{}{}{}{} => vec![{}],",
+                            self_path,
+                            variant.name,
+                            left,
+                            pattern.join(","),
+                            right,
+                            fields.join(",")
+                        )
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let into_into_dart = get_into_into_dart(&src.name, src.wrapper_name.as_ref());
+        format!(
+            "impl support::IntoDart for {} {{
+                fn into_dart(self) -> support::DartAbi {{
                     match {} {{
                         {}
                     }}.into_dart()
                 }}
             }}
+            impl support::IntoDartExceptPrimitive for {0} {{}}
+            {into_into_dart}
             ",
-                name,
-                self_ref,
-                variants.join("\n")
-            )
-        } else {
-            let variants = src
-                .variants()
-                .iter()
-                .enumerate()
-                .map(|(idx, variant)| format!("{}::{} => {},", self_path, variant.name, idx))
-                .collect::<Vec<_>>()
-                .join("\n");
-            format!(
-                "impl support::IntoDart for {} {{
-                fn into_dart(self) -> support::DartCObject {{
-                    match {} {{
-                        {}
-                    }}.into_dart()
-                }}
-            }}
-            ",
-                name, self_ref, variants
-            )
-        }
+            name,
+            self_ref,
+            variants.join("\n")
+        )
     }
 
     fn new_with_nullptr(&self, collector: &mut ExternFuncCollector) -> String {
-        if !self.ir.is_struct {
-            return "".to_string();
-        }
-
-        fn init_of(ty: &IrType) -> &str {
-            if ty.rust_wire_is_pointer() {
-                "core::ptr::null_mut()"
+        fn init_of(ty: &IrType) -> String {
+            if ty.rust_wire_is_pointer(Io) {
+                "core::ptr::null_mut()".to_owned()
+            } else if ty.is_rust_opaque() || ty.is_dart_opaque() {
+                format!("{}::new_with_null_ptr()", ty.rust_wire_type(Io))
             } else {
-                "Default::default()"
+                "Default::default()".to_owned()
             }
         }
 
@@ -303,25 +295,32 @@ impl TypeRustGeneratorTrait for TypeEnumRefGenerator<'_> {
                     return None;
                 };
                 Some(collector.generate(
-                    &format!("inflate_{}", typ),
-                    &[],
+                    &format!("inflate_{typ}"),
+                    NO_PARAMS,
                     Some(&format!("*mut {}Kind", self.ir.name)),
                     &format!(
                         "support::new_leak_box_ptr({}Kind {{
-                        {}: support::new_leak_box_ptr({} {{
-                            {}
-                        }})
-                    }})",
+                            {}: support::new_leak_box_ptr({} {{
+                                {}
+                            }})
+                        }})",
                         self.ir.name,
                         variant.name.rust_style(),
-                        typ,
+                        format_args!("wire_{typ}"),
                         body.join(",")
                     ),
+                    Io,
                 ))
             })
             .collect::<Vec<_>>();
         format!(
-            "impl NewWithNullPtr for {} {{
+            r#"impl Default for {} {{
+                    fn default() -> Self {{
+                        Self::new_with_null_ptr()
+                    }}
+                }}
+
+                impl NewWithNullPtr for {} {{
                 fn new_with_null_ptr() -> Self {{
                     Self {{
                         tag: -1,
@@ -329,8 +328,9 @@ impl TypeRustGeneratorTrait for TypeEnumRefGenerator<'_> {
                     }}
                 }}
             }}
-            {}",
-            self.ir.rust_wire_type(),
+            {}"#,
+            self.ir.rust_wire_type(Io),
+            self.ir.rust_wire_type(Io),
             inflators.join("\n\n")
         )
     }

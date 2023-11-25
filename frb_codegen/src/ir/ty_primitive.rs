@@ -1,6 +1,7 @@
 use crate::ir::*;
+use crate::target::Target;
 
-#[derive(Debug, Clone)]
+crate::ir! {
 pub enum IrTypePrimitive {
     U8,
     I8,
@@ -14,6 +15,9 @@ pub enum IrTypePrimitive {
     F64,
     Bool,
     Unit,
+    Usize,
+    Isize,
+}
 }
 
 impl IrTypeTrait for IrTypePrimitive {
@@ -32,7 +36,9 @@ impl IrTypeTrait for IrTypePrimitive {
             | IrTypePrimitive::U32
             | IrTypePrimitive::I32
             | IrTypePrimitive::U64
-            | IrTypePrimitive::I64 => "int",
+            | IrTypePrimitive::I64
+            | IrTypePrimitive::Usize
+            | IrTypePrimitive::Isize => "int",
             IrTypePrimitive::F32 | IrTypePrimitive::F64 => "double",
             IrTypePrimitive::Bool => "bool",
             IrTypePrimitive::Unit => "void",
@@ -40,18 +46,18 @@ impl IrTypeTrait for IrTypePrimitive {
         .to_string()
     }
 
-    fn dart_wire_type(&self) -> String {
+    fn dart_wire_type(&self, target: Target) -> String {
         match self {
-            IrTypePrimitive::Bool => "int".to_owned(),
+            IrTypePrimitive::I64 | IrTypePrimitive::U64 if target.is_wasm() => "Object".into(),
             _ => self.dart_api_type(),
         }
     }
 
     fn rust_api_type(&self) -> String {
-        self.rust_wire_type()
+        self.rust_wire_type(Target::Io)
     }
 
-    fn rust_wire_type(&self) -> String {
+    fn rust_wire_type(&self, _target: Target) -> String {
         match self {
             IrTypePrimitive::U8 => "u8",
             IrTypePrimitive::I8 => "i8",
@@ -60,13 +66,22 @@ impl IrTypeTrait for IrTypePrimitive {
             IrTypePrimitive::U32 => "u32",
             IrTypePrimitive::I32 => "i32",
             IrTypePrimitive::U64 => "u64",
+            IrTypePrimitive::Unit => "unit",
+            IrTypePrimitive::Usize => "usize",
+            IrTypePrimitive::Isize => "isize",
             IrTypePrimitive::I64 => "i64",
             IrTypePrimitive::F32 => "f32",
             IrTypePrimitive::F64 => "f64",
             IrTypePrimitive::Bool => "bool",
-            IrTypePrimitive::Unit => "unit",
         }
         .to_string()
+    }
+
+    fn intodart_type(&self, _ir_file: &IrFile) -> String {
+        match self {
+            IrTypePrimitive::Unit => String::from("()"),
+            _ => self.rust_api_type(),
+        }
     }
 }
 
@@ -76,7 +91,7 @@ impl IrTypePrimitive {
     /// whenever primitives are put behind a pointer.
     pub fn dart_native_type(&self) -> &'static str {
         match self {
-            IrTypePrimitive::U8 | IrTypePrimitive::Bool => "ffi.Uint8",
+            IrTypePrimitive::U8 => "ffi.Uint8",
             IrTypePrimitive::I8 => "ffi.Int8",
             IrTypePrimitive::U16 => "ffi.Uint16",
             IrTypePrimitive::I16 => "ffi.Int16",
@@ -84,8 +99,11 @@ impl IrTypePrimitive {
             IrTypePrimitive::I32 => "ffi.Int32",
             IrTypePrimitive::U64 => "ffi.Uint64",
             IrTypePrimitive::I64 => "ffi.Int64",
+            IrTypePrimitive::Usize => "ffi.UintPtr",
+            IrTypePrimitive::Isize => "ffi.IntPtr",
             IrTypePrimitive::F32 => "ffi.Float",
             IrTypePrimitive::F64 => "ffi.Double",
+            IrTypePrimitive::Bool => "ffi.Bool",
             IrTypePrimitive::Unit => "ffi.Void",
         }
     }
@@ -103,6 +121,8 @@ impl IrTypePrimitive {
             "f64" => Some(IrTypePrimitive::F64),
             "bool" => Some(IrTypePrimitive::Bool),
             "()" => Some(IrTypePrimitive::Unit),
+            "usize" => Some(IrTypePrimitive::Usize),
+            "isize" => Some(IrTypePrimitive::Isize),
             _ => None,
         }
     }

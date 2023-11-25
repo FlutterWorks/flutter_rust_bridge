@@ -1,8 +1,12 @@
 # Troubleshooting
 
-## The generated store_dart_post_cobject() has the wrong signature / `'stdarg.h' file not found` in Linux
+## The generated store_dart_post_cobject() has the wrong signature / `'stdarg.h' file not found` in Linux / `stdbool.h` / ...
 
-Try to run code generator with working directory at `/`, or add include path as is described in #108. This is a problem with Rust's builtin `Command`. See [#108](https://github.com/fzyzcjy/flutter_rust_bridge/issues/108) for more details.
+Try to run code generator with working directory at `/`, or set the environment variable:
+```bash
+export CPATH="$(clang -v 2>&1 | grep "Selected GCC installation" | rev | cut -d' ' -f1 | rev)/include"
+```
+as described in [ffigen #257](https://github.com/dart-lang/ffigen/issues/257), or add include path as is described in [#108](https://github.com/fzyzcjy/flutter_rust_bridge/issues/108). This is a problem with Rust's builtin `Command`. See also: [#472](https://github.com/fzyzcjy/flutter_rust_bridge/issues/472) & [#494](https://github.com/fzyzcjy/flutter_rust_bridge/issues/494).
 
 ## Issue with `store_dart_post_cobject`
 
@@ -21,42 +25,7 @@ If you are running macOS, you will need to specify a path to your llvm:
 ```shell
 flutter_rust_bridge_codegen --rust-input path/to/your/api.rs --dart-output path/to/file/being/bridge_generated.dart --llvm-path /usr/local/homebrew/opt/llvm/
 ```
-If you are on Intel, you can install llvm using `brew install llvm` and it will be installed at `/usr/local/homebrew/opt/llvm/` by default.
-
-If you are on M1, you need to install the x86 versions of everything and run them through Rosetta 2, since Flutter does not support M1 yet. Start by installing Rosetta 2 if you haven't already:
-
-```shell
-/usr/sbin/softwareupdate --install-rosetta
-```
-Then, install an x86 version of brew to `/usr/local`:
-```shell
-arch -x86_64 zsh
-cd /usr/local && mkdir homebrew
-curl -L https://github.com/Homebrew/brew/tarball/master | tar xz --strip 1 -C homebrew
-```
-Then, you need to use the x86 brew to install the x86 version of llvm:
-```shell
-arch -x86_64 /usr/local/homebrew/bin/brew install llvm
-```
-Reference [this article](https://www.wisdomgeek.com/development/installing-intel-based-packages-using-homebrew-on-the-m1-mac/) for details.
-
-And when you build with cargo, you need to select x86 as the target:
-
-```shell
-cargo build --target=x86_64-apple-darwin
-```
-
-## On M1 MacOS, ` Failed to load dynamic library '/opt/homebrew/opt/llvm/lib/libclang.dylib'`
-
-Full possible error:
-
-```
-Invalid argument(s): Failed to load dynamic library '/opt/homebrew/opt/llvm/lib/libclang.dylib': dlopen(/opt/homebrew/opt/llvm/lib/libclang.dylib, 0x0001): tried: '/opt/homebrew/opt/llvm/lib/libclang.dylib' (mach-o file, but is an incompatible architecture (have 'arm64', need 'x86_64')), '/usr/lib/libclang.dylib' (no such file), '/opt/homebrew/Cellar/llvm/13.0.0_2/lib/libclang.dylib' (mach-o file, but is an incompatible architecture (have 'arm64', need 'x86_64')), '/usr/lib/libclang.dylib' (no such file)
-```
-
-Solution: Install the arm64 version of dart and put that in PATH instead of the x86_64 version that flutter ships. See https://github.com/dart-lang/ffigen/issues/260.
-
-Related: https://github.com/fzyzcjy/flutter_rust_bridge/issues/318#issuecomment-1037718638
+You can install llvm using `brew install llvm` and it will be installed at `/usr/local/homebrew/opt/llvm/` by default.
 
 ## Freezed file is sometimes not generated when it should be
 
@@ -66,17 +35,118 @@ Related: https://github.com/fzyzcjy/flutter_rust_bridge/issues/330
 
 ## `Can't create typedef from non-function type.`
 
-Ensure min sdk version of Flutter `pubspec.yaml` is at least 2.13.0 to let `ffigen` happy.
+Ensure min sdk version of Flutter `pubspec.yaml` is at least 2.17.0 to let `ffigen` happy.
 
 https://github.com/fzyzcjy/flutter_rust_bridge/issues/334
+
+## Imported from both `bridge_definitions.dart` and `bridge_generated.io.dart`
+
+If you use a Rust type with `Kind` in it's name it may conflict with some generated types which can cause a duplicate import error. The workaround is to avoid using `Kind` as a suffix for a type name in Rust. See issue #757 for more details.
+
+## Error on iOS TestFlight only (`store_dart_post_cobject`)
+
+You may have an iOS app that works fine in Debug and Release modes locally but when deployed to TestFlight an error occurs trying to locate the `store_dart_post_cobject` - this is because the nested XCode project for the native bindings maybe be stripping symbols from the linked product.
+
+Select the scheme (eg: `Product > Scheme > native-staticlib`) and go to *Build Settings* then under the `Deployment` section change `Strip Linked Product` to `No`; you may also need to change `Strip Style` to `Debugging Symbols`.
 
 ## Generated code is so long
 
 Indeed all generated code are necessary (if you find something that can be simplified, file an issue). Moreover, other code generation tools also generate long code - for example, when using Google protobuf, a very popular serialization library, I see >10k lines of Java code generated for a quite simple source proto file.
 
-## Why need Dart `2.14.0`
+## Why need Dart `2.17.0`
 
-Dart SDK `>=2.14.0` is needed not by this library, but by the latest version of the `ffigen` tool. Therefore, write `sdk: ">=2.14.0 <3.0.0"` in the `environment` section of `pubspec.yaml`. If you do not want that, consider installing a older version of the `ffigen` tool.
+Dart SDK `>=2.15.0` is supported by this library, but by the latest version of the `ffigen` tool requires `>=2.17.0`. Therefore, write `sdk: ">=2.17.0 <3.0.0"` in the `environment` section of `pubspec.yaml`. If you do not want that, consider installing a older version of the `ffigen` tool.
+
+## Why doesn't `flutter_rust_bridge_serve` work on Firefox?
+
+This is a known issue stemming from Firefox's stricter rules regarding cross-origin requests. Use Chromium for testing, and check out
+[this guide on enabling `crossOriginIsolated`](https://web.dev/cross-origin-isolation-guide/) for your production servers.
+
+## "android context was not initialized", or `ndk_context` initialization.
+
+Related issue: [#1323](https://github.com/fzyzcjy/flutter_rust_bridge/issues/1323).
+
+On android, when attempting to use crates that interact with the JavaVM through the JNI (like oboe-rs via cpal), you may get panics that typically have this message:
+
+```
+[ERROR:flutter/runtime/dart_vm_initializer.cc(41)] Unhandled Exception: FfiException(PANIC_ERROR, android context was not initialized, null)
+```
+
+This is due to a interesting quirk of Rust NDK interaction, where the [`ndk_context`](https://github.com/rust-mobile/ndk-context) crate does not have it's JVM and Android context initialized. Typically, in a normal application, the Android JVM would `System.loadLibrary()` the library through the Activity inside the JVM. It looks for symbols related to the JNI and executes them in accordance with the JNI standard. This would initialize the `ndk_context` normally via `JNI_OnLoad`. However, using the DartVM this step is skipped while loading the library, as the DartVM is not the JVM. So, the Android specific variables are not initialized, and therefore you cannot interact with the system via the Java interface.
+
+### MainActivity.kt 
+
+Add these lines to your FlutterActivity subclass:
+
+```kotlin
+package com.example.frontend
+
+import io.flutter.embedding.android.FlutterActivity
+
+// https://github.com/dart-lang/sdk/issues/46027
+class MainActivity : FlutterActivity() {
+    // this `init` block, where "foo" is the name of your library
+    // ex: if it's libfoo.so, then use "foo"
+    init {
+        System.loadLibrary("foo")
+    }
+}
+```
+
+This handles loading the library before Dart does, and also executes the JNI related initialization.
+
+### Rust
+
+#### Cargo.toml
+
+```toml
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ndk-context = "0.1"
+```
+
+#### lib.rs
+
+```rust
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "C" fn JNI_OnLoad(vm: jni::JavaVM, res: *mut std::os::raw::c_void) -> jni::sys::jint {
+    use std::ffi::c_void;
+
+    let vm = vm.get_java_vm_pointer() as *mut c_void;
+    unsafe {
+        ndk_context::initialize_android_context(vm, res);
+    }
+    jni::JNIVersion::V6.into()
+}
+```
+
+This is the bit of JNI glue that allows for `ndk_context` to be initialized.
+
+## "Could not resolve symbol __cxa_pure_virtual", or libc++_shared issues.
+
+At the time of writing this, linking with `libc++_static` or not linking at all may lead to symbol resolution errors when launching the flutter application, after loading your dynamic library. Adding a fix is quite easy, create a build.rs script in the root of your Rust code:
+
+### build.rs
+
+```rust
+fn main() {
+    #[cfg(target_os = "android")]
+    println!("cargo:rustc-link-lib=c++_shared");
+}
+```
+
+Then, in each `jniLibs` architecture directory, put the corresponding `libc++_shared.so` from the Android NDK. `libc++_shared.so` is typically located in `$ANDROID_NDK/toolchains/llvm/prebuilt/`. You will have to search for it, as it's different for each operating system.
+
+* arm-linux-androideabi -> armeabi-v7a
+* aarch64-linux-android -> arm64-v8a
+* i686-linux-android -> x86
+* x86_64-linux-android -> x86_64
+
+## Issues on Web?
+
+Check out [Limitations on WASM](./wasm_limitations.md) for some common problems and solutions
+to adapt existing code to WASM.
 
 ## Other problems?
 

@@ -1,9 +1,17 @@
+use std::borrow::Cow;
+
 use crate::generator::rust::*;
+use crate::target::Acc;
 use enum_dispatch::enum_dispatch;
 
 #[enum_dispatch]
 pub trait TypeRustGeneratorTrait {
-    fn wire2api_body(&self) -> Option<String>;
+    fn wire2api_body(&self) -> Acc<Option<String>>;
+
+    /// Handles JsValue to Self conversions.
+    fn wire2api_jsvalue(&self) -> Option<Cow<str>> {
+        None
+    }
 
     fn wire_struct_fields(&self) -> Option<Vec<String>> {
         None
@@ -21,20 +29,28 @@ pub trait TypeRustGeneratorTrait {
         obj
     }
 
-    fn wrap_obj(&self, obj: String) -> String {
-        obj
-    }
-
     fn convert_to_dart(&self, obj: String) -> String {
-        format!("{}.into_dart()", obj)
+        format!("{obj}.into_into_dart().into_dart()")
     }
 
     fn structs(&self) -> String {
         "".to_string()
     }
 
-    fn allocate_funcs(&self, _collector: &mut ExternFuncCollector) -> String {
-        "".to_string()
+    fn allocate_funcs(
+        &self,
+        _collector: &mut ExternFuncCollector,
+        _block_index: BlockIndex,
+    ) -> Acc<Option<String>> {
+        Acc::default()
+    }
+
+    fn related_funcs(
+        &self,
+        _collector: &mut ExternFuncCollector,
+        _block_index: BlockIndex,
+    ) -> Acc<Option<String>> {
+        Acc::default()
     }
 
     fn impl_intodart(&self) -> String {
@@ -53,6 +69,7 @@ pub trait TypeRustGeneratorTrait {
 #[derive(Debug, Clone)]
 pub struct TypeGeneratorContext<'a> {
     pub ir_file: &'a IrFile,
+    pub config: &'a Opts,
 }
 
 #[macro_export]
@@ -61,7 +78,7 @@ macro_rules! type_rust_generator_struct {
         #[derive(Debug, Clone)]
         pub struct $cls<'a> {
             pub ir: $ir_cls,
-            pub context: TypeGeneratorContext<'a>,
+            pub context: $crate::generator::rust::ty::TypeGeneratorContext<'a>,
         }
     };
 }
@@ -73,24 +90,39 @@ pub enum TypeRustGenerator<'a> {
     Delegate(TypeDelegateGenerator<'a>),
     PrimitiveList(TypePrimitiveListGenerator<'a>),
     Optional(TypeOptionalGenerator<'a>),
+    OptionalList(TypeOptionalListGenerator<'a>),
     GeneralList(TypeGeneralListGenerator<'a>),
     StructRef(TypeStructRefGenerator<'a>),
     Boxed(TypeBoxedGenerator<'a>),
     EnumRef(TypeEnumRefGenerator<'a>),
+    SyncReturn(TypeSyncReturnGenerator<'a>),
+    DartOpaque(TypeDartOpaqueGenerator<'a>),
+    RustOpaque(TypeRustOpaqueGenerator<'a>),
+    Dynamic(TypeDynamicGenerator<'a>),
+    Record(TypeRecordGenerator<'a>),
 }
 
 impl<'a> TypeRustGenerator<'a> {
-    pub fn new(ty: IrType, ir_file: &'a IrFile) -> Self {
-        let context = TypeGeneratorContext { ir_file };
+    pub fn new(ty: IrType, ir_file: &'a IrFile, config: &'a Opts) -> Self {
+        let context = TypeGeneratorContext { ir_file, config };
         match ty {
             Primitive(ir) => TypePrimitiveGenerator { ir, context }.into(),
             Delegate(ir) => TypeDelegateGenerator { ir, context }.into(),
             PrimitiveList(ir) => TypePrimitiveListGenerator { ir, context }.into(),
             Optional(ir) => TypeOptionalGenerator { ir, context }.into(),
+            OptionalList(ir) => TypeOptionalListGenerator { ir, context }.into(),
             GeneralList(ir) => TypeGeneralListGenerator { ir, context }.into(),
             StructRef(ir) => TypeStructRefGenerator { ir, context }.into(),
             Boxed(ir) => TypeBoxedGenerator { ir, context }.into(),
             EnumRef(ir) => TypeEnumRefGenerator { ir, context }.into(),
+            SyncReturn(ir) => TypeSyncReturnGenerator::new(ir, context).into(),
+            DartOpaque(ir) => TypeDartOpaqueGenerator { ir, context }.into(),
+            RustOpaque(ir) => TypeRustOpaqueGenerator { ir, context }.into(),
+            Dynamic(ir) => TypeDynamicGenerator { ir, context }.into(),
+            Record(ir) => TypeRecordGenerator { ir, context }.into(),
+            Unencodable(IrTypeUnencodable { string, .. }) => {
+                panic!("Cannot generate Rust code for {}", string)
+            }
         }
     }
 }

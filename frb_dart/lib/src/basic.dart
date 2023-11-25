@@ -1,15 +1,23 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:ffi' as ffi;
-import 'dart:ffi';
-import 'dart:isolate';
-import 'dart:typed_data';
 
 import 'package:flutter_rust_bridge/src/platform_independent.dart';
 import 'package:flutter_rust_bridge/src/utils.dart';
 import 'package:meta/meta.dart';
+import 'ffi.dart';
+export 'ffi.dart';
+import 'isolate.dart';
+export 'isolate.dart';
 
 final _instances = <Type>{};
+final _streamSinkNameIndex = <String, int>{};
+
+class _DropIdPortGenerator {
+  static final instance = _DropIdPortGenerator._();
+  _DropIdPortGenerator._();
+
+  int nextPort = 0;
+  String create() => '__frb_dart_opaque_drop_${nextPort++}';
+}
 
 /// Base class for generated bindings of Flutter Rust Bridge.
 /// Normally, users do not extend this class manually. Instead,
@@ -23,68 +31,101 @@ abstract class FlutterRustBridgeBase<T extends FlutterRustBridgeWireBase> {
   @protected
   final T inner;
 
+  late final _dropPort = _initDropPort();
+  NativePortType get dropPort => _dropPort.sendPort.nativePort;
+
+  ReceivePort _initDropPort() {
+    var port = broadcastPort(_DropIdPortGenerator.instance.create());
+    port.listen((message) {
+      inner.drop_dart_object(message);
+    });
+    return port;
+  }
+
+  void dispose() {
+    _dropPort.close();
+  }
+
   void _sanityCheckSingleton() {
     if (_instances.contains(runtimeType)) {
       throw Exception(
-          'Subclasses of `FlutterRustBridgeBase` should be singletons - there should not be two instances (runtimeType=$runtimeType)');
+        'Subclasses of `FlutterRustBridgeBase` should be singletons - '
+        'there should not be two instances (runtimeType=$runtimeType)',
+      );
     }
     _instances.add(runtimeType);
   }
 
   void _setUpRustToDartComm() {
-    inner.store_dart_post_cobject(NativeApi.postCObject.cast());
+    inner.storeDartPostCObject();
   }
 
   /// Execute a normal ffi call. Usually called by generated code instead of manually called.
   @protected
-  Future<S> executeNormal<S>(FlutterRustBridgeTask<S> task) {
+  Future<S> executeNormal<S, E extends Object>(
+      FlutterRustBridgeTask<S, E> task) {
     final completer = Completer<dynamic>();
     final sendPort = singleCompletePort(completer);
     task.callFfi(sendPort.nativePort);
-    return completer.future.then((dynamic raw) => _transformRust2DartMessage(raw, task.parseSuccessData));
+    return completer.future.then((dynamic raw) => _transformRust2DartMessage(
+        raw, task.parseSuccessData, task.parseErrorData, wire2apiPanicError));
   }
 
   /// Similar to [executeNormal], except that this will return synchronously
   @protected
-  Uint8List executeSync(FlutterRustBridgeSyncTask task) {
-    final raw = task.callFfi();
-
-    final bytes = Uint8List.fromList(raw.ptr.asTypedList(raw.len));
-    final success = raw.success > 0;
-
-    inner.free_WireSyncReturnStruct(raw);
-
-    if (success) {
-      return bytes;
-    } else {
-      throw FfiException('EXECUTE_SYNC', utf8.decode(bytes), null);
+  S executeSync<S, E extends Object>(FlutterRustBridgeSyncTask<S, E> task) {
+    final WireSyncReturn syncReturn;
+    try {
+      syncReturn = task.callFfi();
+    } catch (err, st) {
+      throw PanicException('EXECUTE_SYNC_ABORT $err $st');
+    }
+    try {
+      final syncReturnAsDartObject = wireSyncReturnIntoDart(syncReturn);
+      return _transformRust2DartMessage(syncReturnAsDartObject,
+          task.parseSuccessData, task.parseErrorData, wire2apiPanicError);
+    } catch (err) {
+      rethrow;
+    } finally {
+      inner.free_WireSyncReturn(syncReturn);
     }
   }
 
   /// Similar to [executeNormal], except that this will return a [Stream] instead of a [Future].
   @protected
-  Stream<S> executeStream<S>(FlutterRustBridgeTask<S> task) async* {
-    final receivePort = ReceivePort();
+  Stream<S> executeStream<S, E extends Object>(
+      FlutterRustBridgeTask<S, E> task) async* {
+    final func = task.constMeta.debugName;
+    final nextIndex = _streamSinkNameIndex.update(func, (value) => value + 1,
+        ifAbsent: () => 0);
+    final name = '__frb_streamsink_${func}_$nextIndex';
+    final receivePort = broadcastPort(name);
     task.callFfi(receivePort.sendPort.nativePort);
 
     await for (final raw in receivePort) {
       try {
-        yield _transformRust2DartMessage(raw, task.parseSuccessData);
+        yield _transformRust2DartMessage(raw, task.parseSuccessData,
+            task.parseErrorData, wire2apiPanicError);
       } on _CloseStreamException {
         receivePort.close();
+        break;
       }
     }
   }
 
-  S _transformRust2DartMessage<S>(dynamic raw, S Function(dynamic) parseSuccessData) {
+  S _transformRust2DartMessage<S, E extends Object>(
+      List<dynamic> raw,
+      S Function(dynamic) parseSuccessData,
+      E Function(dynamic)? parseErrorData,
+      PanicException Function(dynamic)? parsePanicData) {
     final action = raw[0];
     switch (action) {
       case _RUST2DART_ACTION_SUCCESS:
-        assert(raw.length == 2);
-        return parseSuccessData(raw[1]);
+        return _parseData<S>(raw, parseSuccessData);
       case _RUST2DART_ACTION_ERROR:
-        assert(raw.length == 4);
-        throw FfiException(raw[1], raw[2], raw[3]);
+        throw _parseData<E>(raw, parseErrorData);
+      case _RUST2DART_ACTION_PANIC:
+        throw _parseData<PanicException>(raw, parsePanicData);
       case _RUST2DART_ACTION_CLOSE_STREAM:
         assert(raw.length == 1);
         throw _CloseStreamException();
@@ -93,20 +134,45 @@ abstract class FlutterRustBridgeBase<T extends FlutterRustBridgeWireBase> {
     }
   }
 
-  static const _RUST2DART_ACTION_SUCCESS = 0; // ignore: constant_identifier_names
-  static const _RUST2DART_ACTION_ERROR = 1; // ignore: constant_identifier_names
-  static const _RUST2DART_ACTION_CLOSE_STREAM = 2; // ignore: constant_identifier_names
+  R _parseData<R>(List<dynamic> rawData, R Function(dynamic)? function) {
+    assert(rawData.length == 2);
+    if (function != null) {
+      return function(rawData[1]);
+    }
+
+    throw Exception("tried to parse data but function is null");
+  }
+
+  // ignore: constant_identifier_names
+  static const _RUST2DART_ACTION_SUCCESS = 0;
+
+  // ignore: constant_identifier_names
+  static const _RUST2DART_ACTION_ERROR = 1;
+
+  // ignore: constant_identifier_names
+  static const _RUST2DART_ACTION_CLOSE_STREAM = 2;
+
+  // ignore: constant_identifier_names
+  static const _RUST2DART_ACTION_PANIC = 3;
 }
 
 /// A task to call FFI function.
 @immutable
-class FlutterRustBridgeTask<S> extends FlutterRustBridgeBaseTask {
-  final void Function(int port) callFfi;
+class FlutterRustBridgeTask<S, E extends Object>
+    extends FlutterRustBridgeBaseTask {
+  /// The underlying function to call FFI function, usually the generated wire function
+  final void Function(NativePortType port) callFfi;
+
+  /// Parse the returned data from the underlying function
   final S Function(dynamic) parseSuccessData;
+
+  /// Parse the returned error data from the underlying function
+  final E Function(dynamic)? parseErrorData;
 
   const FlutterRustBridgeTask({
     required this.callFfi,
     required this.parseSuccessData,
+    required this.parseErrorData,
     required FlutterRustBridgeTaskConstMeta constMeta,
     required List<dynamic> argValues,
     required dynamic hint,
@@ -119,11 +185,21 @@ class FlutterRustBridgeTask<S> extends FlutterRustBridgeBaseTask {
 
 /// A task to call FFI function, but it is synchronous.
 @immutable
-class FlutterRustBridgeSyncTask extends FlutterRustBridgeBaseTask {
-  final WireSyncReturnStruct Function() callFfi;
+class FlutterRustBridgeSyncTask<S, E extends Object>
+    extends FlutterRustBridgeBaseTask {
+  /// The underlying function to call FFI function, usually the generated wire function
+  final WireSyncReturn Function() callFfi;
+
+  /// Parse the returned data from the underlying function
+  final S Function(dynamic) parseSuccessData;
+
+  /// Parse the returned errordata from the underlying function
+  final E Function(dynamic)? parseErrorData;
 
   const FlutterRustBridgeSyncTask({
     required this.callFfi,
+    required this.parseSuccessData,
+    required this.parseErrorData,
     required FlutterRustBridgeTaskConstMeta constMeta,
     required List<dynamic> argValues,
     required dynamic hint,
@@ -134,28 +210,29 @@ class FlutterRustBridgeSyncTask extends FlutterRustBridgeBaseTask {
         );
 }
 
-/// This class, together with its subclasses, are only for internal usage.
-/// Usually it should not be used by normal users.
-abstract class FlutterRustBridgeWireBase {
-  // ignore: non_constant_identifier_names
-  void store_dart_post_cobject(
-    ffi.Pointer<ffi.NativeFunction<ffi.Uint8 Function(ffi.Int64, ffi.Pointer<ffi.Void>)>> ptr,
-  );
-
-  // ignore: non_constant_identifier_names
-  void free_WireSyncReturnStruct(WireSyncReturnStruct val);
-}
-
 class _CloseStreamException {}
 
-// NOTE for maintainer: Please manually keep in sync with [WireSyncReturnStruct] in Rust
-/// This class is only for internal usage.
-class WireSyncReturnStruct extends ffi.Struct {
-  external ffi.Pointer<ffi.Uint8> ptr;
+class FrbException implements Exception {}
 
-  @ffi.Int32()
-  external int len;
+class PanicException extends FrbException {
+  final String error;
 
-  @ffi.Uint8()
-  external int success;
+  PanicException(this.error);
+}
+
+PanicException wire2apiPanicError(dynamic raw) {
+  return PanicException(raw as String);
+}
+
+class FrbAnyhowException implements FrbException {
+  final String anyhow;
+
+  FrbAnyhowException(this.anyhow);
+
+  @override
+  String toString() => 'FrbAnyhowException($anyhow)';
+}
+
+abstract class FrbBacktracedException extends FrbException {
+  String get backtrace;
 }
