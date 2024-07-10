@@ -7,13 +7,13 @@ repository:
   name: flutter_rust_bridge
 
   # A short description of the repository that will show up on GitHub
-  description: High-level memory-safe binding generator for Flutter/Dart <-> Rust
+  description: Flutter/Dart <-> Rust binding generator, feature-rich, but seamless and simple.
 
   # A URL with more information about the repository
   homepage: https://fzyzcjy.github.io/flutter_rust_bridge/
 
   # A comma-separated list of topics to set on the repository
-  topics: dart, rust, ffi, flutter, bindgen, hacktoberfest
+  topics: dart, rust, ffi, flutter, bindgen
 
   # Either `true` to make the repository private, or `false` to make it public.
   private: false
@@ -77,9 +77,9 @@ labels:
   - name: good first issue
     color: '#7057ff'
     description: Good for newcomers
-  - name: await response
+  - name: awaiting
     color: '#bbdefb'
-    description: Waiting for responses
+    description: Waiting for responses, PR, further discussions, upstream release, etc
   - name: pass triage
     color: '#c8e6c9'
     description: Pass the triage

@@ -1,154 +1,69 @@
 # NOTE: Please keep in sync with `ci.yaml`
 #
-# Ensure README.md's steps can work correctly, where users use the released versions
+# Ensure doc's steps can work correctly, where users use the released versions
 # instead of the code in master branch
 name: Post-Release
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch: { }
   schedule:
     - cron: "0,30 * * * *"
 
 env:
   CARGO_TERM_COLOR: always
-  FRB_TEST_USE_RELEASE_VERSION: true
+  FRB_MAIN_RUST_VERSION: 1.79.0
+  FRB_MAIN_DART_VERSION: 3.4.0
+  FRB_MAIN_FLUTTER_VERSION: 3.22.0
 
 jobs:
-  # -------------------------- test --------------------------
-  valgrind_test:
-    name: Valgrind test
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: extractions/setup-just@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Use released version of flutter_rust_bridge instead of master version
-        run: just use_flutter_rust_bridge_release
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.70.0
-          components: rustfmt
-      - uses: dart-lang/setup-dart@v1
-        with:
-          sdk: "3.0.0"
-          architecture: x64
-      - uses: actions/setup-python@v2
-        with:
-          python-version: "3.x"
-
-      - run: just ci_valgrind
-
-  # ref https://betterprogramming.pub/test-flutter-apps-on-android-with-github-actions-abdba2137b4
-  flutter_test_android:
-    name: Flutter integration test on Android
-    runs-on: macos-latest
-    strategy:
-      matrix:
-        device:
-          - "pixel"
-          - "Nexus 6"
-      fail-fast: false
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: extractions/setup-just@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Use released version of flutter_rust_bridge instead of master version
-        run: just use_flutter_rust_bridge_release
-
-      - id: checkout
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.70.0
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: "stable"
-          flutter-version: 3.13.6
-          architecture: x64
-      - uses: actions/setup-java@v1
-        with:
-          java-version: "8.x" # "betterprogramming.pub" says must be java "8"
-      - uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r21e # r25b
-          local-cache: true
-
-      - uses: actions/cache@v3
-        id: cache-deps
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            ./frb_example/with_flutter/rust/target
-          key: ${{ runner.os }}-cargo-integrate-android-${{ hashFiles('**/Cargo.lock') }}-${{ steps.checkout.outputs.rustc_hash }}
-
-      - name: Add Rust targets
-        run: rustup target add x86_64-linux-android
-
-      - name: Install `cargo-ndk`
-        if: steps.cache-deps.outputs.cache-hit != 'true'
-        run: cargo install cargo-ndk --force
-
-      - name: Install Flutter dependencies
-        working-directory: ./frb_example/with_flutter
-        run: flutter pub get
-
-      - name: Build Rust lib
-        working-directory: ./frb_example/with_flutter/rust
-        # NOTE since run on simulator, need -t to be x86_64. For real devices, of course arm-like ones.
-        run: cargo ndk --bindgen -t x86_64 -o ../android/app/src/main/jniLibs build
-
-      - name: Run Flutter integration tests
-        continue-on-error: true
-        timeout-minutes: 20
-        uses: Wandalen/wretry.action@v1.0.25
-        with:
-          action: reactivecircus/android-emulator-runner@v2
-          with: |
-            api-level: 29
-            arch: x86_64
-            profile: ${{ matrix.device }}
-            script: cd frb_example/with_flutter && flutter test integration_test/main.dart --verbose
-
-  # -------------------------- codegen --------------------------
-  codegen:
-    name: Codegen
+  test_mimic_quickstart:
+    name: 'Test :: MimicQuickstart'
     runs-on: ${{ matrix.image }}
-
     strategy:
       fail-fast: false
       matrix:
         image:
-          - macos-11
-          - windows-2019
-          - ubuntu-20.04
+          - windows-2022
+          # need macos-"13" because https://github.com/fzyzcjy/flutter_rust_bridge/issues/1225
+          - macos-13
+          - ubuntu-latest
+        codegen_install_mode:
+          - cargo-install
+          - cargo-binstall
+          # - scoop # TODO re-enable after configured
+          # - homebrew # TODO re-enable after configured
+        exclude:
+          - { image: windows-2022, codegen_install_mode: homebrew }
+          - { image: macos-13, codegen_install_mode: scoop }
+          - { image: ubuntu-latest, codegen_install_mode: homebrew }
+          - { image: ubuntu-latest, codegen_install_mode: scoop }
 
     steps:
+      # setup
+      - uses: catchpoint/workflow-telemetry-action@v1
+        with:
+          comment_on_pr: false
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.70.0
-          components: rustfmt, clippy
+          toolchain: ${{ env.FRB_MAIN_RUST_VERSION }}
+          components: rustfmt
       - uses: subosito/flutter-action@v2
         with:
-          channel: "stable"
-          flutter-version: "3.13.6"
+          cache: true
+          flutter-version: ${{ env.FRB_MAIN_FLUTTER_VERSION }}
           architecture: x64
-      - uses: extractions/setup-just@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - if: matrix.codegen_install_mode == 'cargo-binstall'
+        uses: cargo-bins/cargo-binstall@main
+      - if: runner.os == 'Windows' && matrix.codegen_install_mode == 'scoop'
+        uses: MinoruSekine/setup-scoop@main
+      # https://docs.flutter.dev/get-started/install/linux#linux-prerequisites
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install clang cmake git ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev
+      - if: runner.os == 'Linux'
+        uses: pyvista/setup-headless-display-action@v1
 
-      - name: Install released version of codegen
-        run: cargo install flutter_rust_bridge_codegen --features="chrono,uuid"
-
-      - run: just ci_codegen
+      # execute
+      - run: ./frb_internal post-release-mimic-quickstart --codegen-install-mode ${{ matrix.codegen_install_mode }}
