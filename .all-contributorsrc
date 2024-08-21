@@ -352,6 +352,33 @@
       ]
     },
     {
+      "login": "wxitcode",
+      "name": "wxitcode",
+      "avatar_url": "https://avatars.githubusercontent.com/u/37947163?v=4",
+      "profile": "https://github.com/wxitcode",
+      "contributions": [
+        "doc"
+      ]
+    },
+    {
+      "login": "Tienisto",
+      "name": "Tien Do Nam",
+      "avatar_url": "https://avatars.githubusercontent.com/u/38380847?v=4",
+      "profile": "https://tienisto.com",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "Markus43",
+      "name": "Markus",
+      "avatar_url": "https://avatars.githubusercontent.com/u/23716360?v=4",
+      "profile": "https://github.com/Markus43",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
       "login": "Krysl",
       "name": "Krysl",
       "avatar_url": "https://avatars.githubusercontent.com/u/5905801?v=4",
@@ -647,15 +674,6 @@
       "profile": "https://matrix.to/#/@vincentherl:matrix.org",
       "contributions": [
         "code"
-      ]
-    },
-    {
-      "login": "wxitcode",
-      "name": "wxitcode",
-      "avatar_url": "https://avatars.githubusercontent.com/u/37947163?v=4",
-      "profile": "https://github.com/wxitcode",
-      "contributions": [
-        "doc"
       ]
     },
     {
